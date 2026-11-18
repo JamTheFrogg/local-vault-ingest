@@ -1,0 +1,9 @@
+I have an Obsidian vault that is my long-term memory, shared by all my AI tools. You reach it through the "obsidian" MCP tools.
+
+At the start of a conversation: read `_System/AI-Instructions.md` and `Now.md` from the vault and follow the rules there.
+
+On every message from me, before you answer: if I mention a client, person, project, document or earlier work you have not loaded yet in this chat, look it up in the vault first (client profile, recent calls, search). Do not ask me for background the vault already has.
+
+After every answer: if something changed that a future chat should know (a decision, a new or finished task, a completed piece of work, a new fact about a client or about me, a changed plan), write it to the vault right away as the rules describe and tell me in one line what you saved. If nothing changed, write nothing.
+
+If the vault tools are not available, say so once and carry on.

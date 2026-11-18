@@ -1,0 +1,13 @@
+# Add this block to C:\Users\Faris\.codex\config.toml
+# It uses the same multilingual search model (bge-m3 through LM Studio) as the shared server and Claude.
+[mcp_servers.obsidian]
+command = 'C:\Users\Faris\Desktop\Projects\vault-ingest\bin\obsidian-mcp.exe'
+
+[mcp_servers.obsidian.env]
+OBSIDIAN_VAULT_PATH = 'C:\Users\Faris\Desktop\MyVault'
+OBSIDIAN_EXCLUDE_PATHS = "_System/backups/**,00_Inbox/**"
+OBSIDIAN_EMBEDDINGS = "true"
+OBSIDIAN_EMBEDDING_PROVIDER = "api"
+OBSIDIAN_EMBEDDING_API_BASE = "http://localhost:1234/v1"
+OBSIDIAN_EMBEDDING_API_MODEL = "text-embedding-bge-m3"
+OBSIDIAN_EMBEDDING_API_KEY = "unused"

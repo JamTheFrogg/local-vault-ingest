@@ -2,7 +2,7 @@
 
 Turns client call transcripts into chunked, searchable Obsidian notes, so every AI connected to your vault (Claude, Cursor, Codex…) has full client context without you explaining anything.
 
-**First time? Follow [SETUP.md](SETUP.md).**
+**First time? Follow [SETUP.md](SETUP.md).** Claude Cowork uses the vault folder plus `configs/vault-CLAUDE.md` — the steps are in SETUP, under Claude Cowork.
 
 ## What happens to a transcript
 
@@ -44,9 +44,13 @@ Run these from this folder:
 .\.venv\Scripts\vault-ingest clients find "amra"                    # fuzzy matches, with scores
 .\.venv\Scripts\vault-ingest transcribe "C:\path\call.mp4"          # transcript only; prints timing and the first 30 lines
 .\.venv\Scripts\vault-ingest transcribe "C:\path\call.mp4" --compare hr,bs   # first 5 minutes in both languages
+.\.venv\Scripts\vault-ingest gpu status         # what is loaded, VRAM, queue, paused or not
+.\.venv\Scripts\vault-ingest gpu free           # unload the chat model and pause until you resume
+.\.venv\Scripts\vault-ingest gpu free --for 1h  # same, for one hour
+.\.venv\Scripts\vault-ingest gpu resume         # clear the pause
 ```
 
-`reprocess` redoes one call, for example after you edit the prompts. It overwrites that call's note and parts, and it won't duplicate lines in the profile.
+`reprocess` redoes one call, for example after you edit the prompts. It overwrites that call's note and parts, and it won't duplicate lines in the profile. `reprocess --from-audio` transcribes the call's audio again first, so a change to how timestamps are written actually shows up, then redoes the notes. The previous run's profile lines are replaced, except anything in Snapshot.
 
 `reprocess --all-local` finds every call in `_System/ingest-log.json` that was written in local mode, tells you how many there are, and asks before doing anything. It uses the **current** mode, so run `mode cloud` first if you want Claude to redo them.
 
@@ -65,15 +69,15 @@ Switching only rewrites the `LLM_MODE` line, so the other profile's settings (in
 **Setting up LM Studio:**
 
 1. Download a model. A **14B+ instruct** model (for example Qwen 2.5/3 14B Instruct, Gemma 3 12B+, Mistral Small 24B) is the practical minimum. 7–8B models run, but their summaries miss details and they break the JSON format more often. Expect noticeably weaker notes than Claude either way.
-2. Load it in the **Developer** tab with a **context length of at least 16k** (16384). The default of 4k is too small for the call-note and profile prompts.
-3. Start the server there (default `http://localhost:1234`). If the `lms` command-line tool is on your PATH, vault-ingest tries `lms server start` once by itself when the server isn't running.
+2. Leave the chat model **unloaded**. In local mode vault-ingest loads it itself (`lms load`, GPU max, one slot, context `LOCAL_CONTEXT`, default 8192) before the summary step and unloads it when the inbox is empty. The `lms` command needs to be on PATH. If the server isn't running, vault-ingest tries `lms server start`.
+3. The embedding model (bge-m3) stays loaded and must be on the CPU. If vault-ingest sees it on the GPU, the log says so and tells you to run `lms unload <id>` then `lms load <id> --gpu off`.
 
-With `LOCAL_MODEL=auto`, vault-ingest uses the first loaded model that isn't an embedding model. Set `LOCAL_MODEL` to a model id to pin one.
+With `LOCAL_MODEL=auto`, vault-ingest picks the first non-embedding model (one that is already loaded, otherwise the first downloaded one) and loads that. Set `LOCAL_MODEL` to a model id to pin one. Set `LOCAL_MANAGE_MODELS=false` to leave loading and unloading to you.
 
 In local mode:
 
-- If LM Studio isn't running, or has no model loaded, files **stay in the inbox**. `run` logs one warning and exits with code 1. `watch` retries every 60 seconds. Only real processing errors go to `_needs-review`.
-- Requests use LM Studio's structured output (`json_schema`). If the server or model rejects it, vault-ingest falls back to the plain JSON prompt for the rest of that run. `<think>…</think>` reasoning is stripped before parsing.
+- If LM Studio isn't running, or has no model loaded, files **stay in the inbox**. `run` logs one warning and exits with code 1. `watch` retries every 60 seconds, or every 5 minutes when LM Studio could not be started. A timeout or an LM Studio error is retried 3 times (30 s, 60 s, 120 s) and the file stays in the inbox; only the third failure moves it to `_needs-review`, with the measured speed in the `.why.md`.
+- Requests stream from LM Studio and cap `max_tokens`. Chunk digests, client identification, and the evidence check run with reasoning off. The call note and profile update follow `LOCAL_THINKING` (default off). A request that goes silent for 90 seconds is retried once with the same settings. Structured output is `json_schema`; if the server rejects it, vault-ingest falls back to the plain JSON prompt for the rest of that run. `<think>…</think>` reasoning is stripped before parsing.
 - Calls longer than `LOCAL_DIRECT_SUMMARY_MAX_WORDS` (default 3000) are summarized from the per-part digests, so they fit smaller context windows. If a prompt still doesn't fit, the log says so. Load the model with a bigger context length, or lower `CHUNK_MAX_WORDS`.
 
 Every call note, transcript part, and ingest-log record gets `generated_by: <mode>/<model>` (for example `local/qwen3-14b`), so you can tell later which calls to redo with `reprocess --all-local`.
@@ -113,6 +117,9 @@ Older `.env` files without `LLM_MODE` still work. `LLM_PROVIDER` (`anthropic`, `
 | `LOCAL_CONCURRENCY` | `1` | parallel AI calls in local mode |
 | `LOCAL_TIMEOUT` | `900` | seconds per AI call in local mode |
 | `LOCAL_DIRECT_SUMMARY_MAX_WORDS` | 3000 | local: longer calls are summarized from per-part digests |
+| `LOCAL_CONTEXT` | 8192 | context length when vault-ingest loads the chat model |
+| `LOCAL_THINKING` | false | reasoning on the call note and profile update; chunk digests, client identification, and the evidence check stay off. Silence still retries once after 90s |
+| `LOCAL_MANAGE_MODELS` | true | load and unload the chat model around jobs; embeddings are never touched |
 | `NOTES_LANGUAGE` | same as transcript | e.g. `English` |
 | `CHUNK_MIN_WORDS` / `CHUNK_MAX_WORDS` / `CHUNK_OVERLAP_WORDS` | 600 / 900 / 100 | |
 | `PROFILE_MAX_WORDS` | 1500 | archive threshold |
@@ -135,7 +142,7 @@ Audio and video dropped in `00_Inbox` (`.wav .mp3 .m4a .mp4 .mkv .webm .ogg .fla
 
 The companion watches `%USERPROFILE%\Music\meetily-recordings`. Meetily saves each meeting as one folder with a single mixed `audio.mp4` (microphone and system audio already combined, so the transcript has no speaker labels). When that file's size has stayed the same for 30 seconds, the companion transcribes it in place — it never moves or deletes Meetily's files — and writes `00_Inbox/<meeting name> - YYYY-MM-DD.txt`. The inbox watcher then ingests that text. The same folder is not transcribed twice (`_System/whisper-sources.json`).
 
-Whisper large-v3 and a local chat model do not both fit in 8 GB. Before transcribing, vault-ingest runs `lms unload --all` when the `lms` command is available. It unloads Whisper before the summary calls, and LM Studio loads its model again on the next request.
+Whisper large-v3 and a local chat model do not both fit in 8 GB. Before transcribing, vault-ingest unloads the chat model it manages (never the embedding model). After every transcription, including when it fails, the Whisper model object is deleted so CUDA memory is released. The chat model is loaded again for the summary step.
 
 Install the engine once, from this folder:
 
@@ -149,6 +156,29 @@ On Windows the CUDA build also needs the `nvidia-cublas-cu12` and `nvidia-cudnn-
 
 `vault-ingest transcribe <file>` only transcribes. `--compare hr,bs` runs the first 5 minutes in each language and writes `_System/<name> - compare.md` with the two transcripts side by side. It does not ingest the file.
 
+## GPU and game mode
+
+Local mode keeps the GPU free whenever a call is not actually being processed.
+
+- Before the summary step, the watcher loads the chat model and waits until LM Studio reports it loaded. `ingest.log` records dedicated VRAM and the processes holding it just before `lms load`, then VRAM after the model is ready and after the unload. It also says whether the embedding model is on the CPU.
+- The model stays loaded from one inbox file to the next. It is unloaded when the queue is empty, when a job fails, and when you press Ctrl+C. Every LM Studio request also sends `"ttl": 120`, so a crash still drops the model after two idle minutes.
+- On startup, if that chat model is still loaded and nothing is running, it is unloaded. That clears a model left behind by a crash.
+- Whisper is deleted after each transcription. The embedding model is not loaded or unloaded by this tool.
+
+**Game mode** is checked every 5 seconds by the watcher and by the companion. The rules are `GPU_BUSY_RULES` in `companion.toml`. The GPU counts as busy when any of these is true:
+
+- A running program's path is under a Steam, Epic, GOG, or Xbox games folder, or its name is in `names` (Project Zomboid is in the list to start with).
+- The foreground window covers the screen (fullscreen or borderless) and the program is not a browser, a meeting app, or an editor (`fullscreen_ignore`).
+- Other programs are using more than `vram_mb` (default 3000) of GPU memory while neither the chat model nor Whisper is loaded.
+
+When that happens, the in-flight summary request or transcription is cancelled, the chat model and Whisper are unloaded, and the job goes back to the front of its queue. Nothing is written to the vault for that attempt. Processing resumes on its own 60 seconds after the GPU is free (`resume_after_seconds`). A meeting that is still open also holds the queue: no new GPU work starts until it ends. A job that had already started is left to finish.
+
+A Windows notification says `Paused: <game> is running - GPU freed` and, later, `Resumed processing (N calls waiting)`. The same lines are added to `_System/digest.md`.
+
+**By hand.** The tray icon (idle, processing, or paused) has Free GPU for 1 hour, Free GPU until I resume, Resume, and Status. `Ctrl+Alt+G` toggles pause. The companion shows the icon when it is running; otherwise the watcher does. A manual pause is not cleared by the 60-second timer. `gpu free --for 1h` ends on its own.
+
+`gpu status` prints the chat model, VRAM, how many calls are waiting, and whether processing is paused and why.
+
 ## Meeting companion
 
 `vault-ingest companion` runs in the background (the "Meeting companion" startup task) and logs to `_System/companion.log`. Its settings and detection rules are in `companion.toml` next to this README. Restart it after editing that file.
@@ -160,9 +190,15 @@ On Windows the CUDA build also needs the `nvidia-cublas-cu12` and `nvidia-cudnn-
 - Zoom in a browser: titles containing both "Zoom" and "Meeting"
 - Microsoft Teams: meeting or call windows (titles with "Meeting" or "Call"). Teams names scheduled meetings after their subject, so add a rule if yours aren't picked up.
 
+**Microphone detection (any call app).** Window titles miss calls in apps without a rule (WhatsApp, Viber, Discord...) and Teams meetings whose title has neither "Meeting" nor "Call". So the companion also asks the system which apps are recording from the microphone right now. On Windows that is the same list as Settings > Privacy & security > Microphone, read from `HKCU\...\CapabilityAccessManager\ConsentStore\microphone`; on Linux it is `pactl list source-outputs`, on macOS 14.2+ CoreAudio (see [macOS and Linux](#macos-and-linux)). An app that holds it for 15 seconds (`[microphone] start_after_seconds`, so a WhatsApp voice message doesn't count) starts a meeting. `[[mic_apps]]` names WhatsApp, Teams, Zoom, Viber, Discord, Slack, Signal, Telegram, Messenger, Skype and browser calls, and `any_app = true` counts any other app as "Call (<app>)". Meetily, recorders, OBS, voice typing and the like are in `[microphone] ignore`, because Meetily holds the microphone while it records. A WhatsApp call is named after its call window (the contact), and that name is remembered per contact in the meeting map like a Meet code. Window rules still win when both match. While a game has a window open (a program in a Steam/Epic/GOG/Xbox folder), the microphone does not start a meeting, because that is game voice chat (`skip_while_gaming`). A game's crash reporter or anti-cheat service that keeps running after the game is closed (`crashpad_handler.exe`, `service.exe`...) does not count as a game (`[GPU_BUSY_RULES] helpers`). Microphone use also keeps a meeting going when you switch away from a Meet tab.
+
 A browser only shows the title of the active tab. While the meeting's browser is playing audio, the meeting counts as ongoing, so switching tabs doesn't end it (`audio_keeps_meeting_alive`). The flip side is that other audio in that browser, such as a video, keeps the meeting open too. To recognize another app, add a `[[rules]]` block with the process names and a title regex.
 
-**Popup.** When a meeting starts, the [client picker](#client-picker) opens in the corner and leaves the keyboard in the meeting. **Record in Meetily** brings Meetily to the front, or starts it (`[popup] meetily_paths`). It never clicks anything inside Meetily, so you press Meetily's own record button yourself. If the picker window cannot start, a Windows notification is shown instead.
+**Popup.** When a meeting starts, the [client picker](#client-picker) opens in the bottom-right corner and hands the keyboard straight back to the meeting, and a notification says a meeting was detected and how to reopen the popup. **Record (Meetily) + screenshot participants** hides the popup for a moment, takes a screenshot of the whole desktop (all monitors), then brings Meetily to the front or starts it (`[popup] meetily_paths`). It never clicks anything inside Meetily, so you press Meetily's own record button yourself. Two minutes later it takes one more screenshot for late joiners, but only if the meeting window is in front (`participant_followup_seconds`, 0 turns it off; `participant_screenshot = false` turns both off). If the picker window cannot start, a Windows notification with a Record button is shown instead.
+
+**Tray icon.** The companion's round icon sits by the clock (Windows 11 may put it under the `^` arrow; drag it onto the taskbar, or turn it on in Settings > Personalization > Taskbar > Other system tray icons, "pythonw"). **Click it to bring the popup back** if you closed it by accident: it opens for the meeting going on, or the one that ended in the last 30 minutes. Right-click for **Take participant screenshot now** and the GPU pause items. `Ctrl+Alt+C` does the same as the click.
+
+**Participant screenshots** are filed like snips, as `_System/screenshots/<date>/<time> participants.png` with `"kind": "participants"` in the session file. At ingest the vision model reads the participant names from the tiles, labels and participant list into `people`; the call note lists them under **Participants**, the summary prompt uses them to tell who said what, and the Screenshots section shows "People on screen". Nothing is sent anywhere new: in local mode the image goes to LM Studio like any other screenshot.
 
 **Session files.** Each meeting is written to `_System/meetings/YYYY-MM-DD HH-MM-SS <app>.json`. A file holds the app, window title, start, end, duration in seconds, whether Record was clicked, and the screenshots taken during the meeting. Times are local with their UTC offset, for example `2026-10-01T14:05:00+02:00`.
 
@@ -177,7 +213,37 @@ A browser only shows the title of the active tab. While the meeting's browser is
 
 The description prompt is `prompts/screenshot.md`.
 
+**Phone recordings.** Plug the phone in and choose File transfer. Every 5 seconds the companion checks whether Faris's A33 is connected (`[phone]` in `companion.toml`). When storage is readable it looks in `Internal storage/Recordings/Voice Recorder` and takes the newest audio file. The copy is read-only: nothing on the phone is deleted, moved, or renamed. A SHA-256 ledger at `state/phone_imports.json` (in this tool's folder, not the vault) records each file as queued, ingested, or skipped. The first start fills that ledger from `_System/audio/` and from `audio_sha256` on call notes. Delete `state/phone_imports.json` and restart the companion to rebuild it.
+
+If that newest file is already known, a toast says "Latest recording already in vault" and nothing is copied again. If it is new, the client picker opens and takes the keyboard. The heading shows the file name, the local time, and the length, and the title is prefilled with the recorder name (`Voice 002`). The skip row says **Not a meeting / skip**. Choosing a client writes `<Client> - YYYY-MM-DD - <Title>.<ext>` into `00_Inbox`. The date comes from the file name when it has one, otherwise from the recording's modified time. The watcher then transcribes it and toasts `Done:`, the same as a file you dropped in by hand. Closing the picker writes nothing and asks again the next time the phone is plugged in. While the phone is only charging, one toast says "Unlock the phone and choose File transfer". A folder named `Call` is ignored. Accepted types are `.m4a`, `.mp3`, `.wav`, `.aac`, `.amr`, `.3ga`, `.ogg`, and `.opus`.
+
 **Meetily's own transcript.** With `TRANSCRIPT_SOURCE=meetily`, the companion reads `%APPDATA%\com.meetily.ai\meeting_minutes.sqlite` every 30 seconds and never writes to it. When a transcript has stopped changing for 2 minutes, or Meetily marks its summary as finished, it writes `00_Inbox/<Meeting title> - YYYY-MM-DD.txt`. Exported meetings are listed in `_System/meetily-exported.json`. Recordings that existed before the first run are not exported. The default `TRANSCRIPT_SOURCE=whisper` skips this and transcribes `audio.mp4` instead (see [Transcription](#transcription)).
+
+
+## macOS and Linux
+
+The ingest pipeline runs anywhere Python 3.11+ runs. The meeting companion runs on Windows, macOS and Linux; what it can see depends on the platform:
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| Meeting window titles | Win32 | Quartz (needs **Screen Recording** permission) | X11 / XWayland (python-xlib or `wmctrl`); not native Wayland windows |
+| Which app uses the microphone | consent store | CoreAudio, macOS 14.2+ (older: "mic in use", credited to the front app) | PulseAudio / PipeWire (`pactl`) |
+| Popup, tray icon, notifications | yes | yes (`osascript` notifications) | yes (`notify-send`; a tray needs a desktop with a system tray / AppIndicator) |
+| Hotkeys | yes | yes (needs **Accessibility / Input Monitoring**) | X11 sessions |
+| Snip hotkey | Win+Shift+S | `screencapture -i`, saved into the screenshot folder | gnome-screenshot, spectacle, flameshot, grim+slurp or scrot |
+| USB phone import | yes | no | no |
+
+Install and start at login:
+
+```bash
+bash unix/install.sh             # .venv, dependencies, self-tests
+bash unix/register-startup.sh    # LaunchAgents (macOS) or ~/.config/autostart entries (Linux)
+bash unix/register-startup.sh --remove
+```
+
+On Linux install `python3-tk`, `pulseaudio-utils` (or `pipewire-pulse`) and `libnotify-bin` from your package manager. On macOS, the first start asks for Screen Recording and Accessibility for Python; allow both and run `register-startup.sh` again so the companion restarts with them. Logs are in `_System/companion.log` like on Windows, plus `state/logs/` for anything printed before logging starts.
+
+`companion.toml` lists Windows, macOS and Linux process names (`chrome.exe`, `Google Chrome`, `chrome`), and a setting can differ per OS with a dotted key, for example `folder.macos = '~/Desktop/Screenshots'`. Without one, each OS uses its own default.
 
 ## Client picker
 
@@ -190,11 +256,12 @@ Meetily stays the recorder. The picker only chooses where the call is filed.
 | `Ctrl+Alt+C` | Open the client picker and give it the keyboard (`[popup] picker_hotkey`) |
 | `Ctrl+Alt+S` | Open the snip overlay, same as Win+Shift+S (`[screenshots] hotkey`) |
 
-When a meeting is detected, a small always-on-top window (about 420×320, bottom-right) opens **without** taking focus, so you can keep typing in the meeting. It takes the keyboard when you click it or press `Ctrl+Alt+C`. You can open it any time, including when no meeting is running.
+When a meeting is detected, a small always-on-top window (about 440×440, bottom-right) opens **without** taking focus, so you can keep typing in the meeting. It takes the keyboard when you click it or press `Ctrl+Alt+C`. You can open it any time, including when no meeting is running.
 
-Type to filter. Up and Down move. Enter confirms. Esc closes the window and leaves the choice for later (the file name or the AI decides, as before). The list shows the top 8 matches, then three fixed rows:
+The popup is a dark card with the meeting's app and title at the top. Type to filter. Up and Down move. Enter confirms. Esc in a name step goes back to the list; Esc on the list (or the X) closes the window and leaves the choice for later (the file name or the AI decides, as before). The list shows the top 8 matches, then three fixed rows:
 
-- **Create new client:** followed by what you typed
+- **＋ New client** — with text typed, that becomes the name; with nothing typed, Enter asks for the name right in the popup
+- **♥ Personal call (not a client)** — asks "Who is the call with?" (prefilled with what you typed, or the WhatsApp/Viber contact) and files the call under `Clients/Personal` with that name at the start of the title, e.g. `2026-10-28 Amra - Wedding venue`
 - **Not a client call (Unsorted)** — files the call under `Clients/Unsorted`
 - **Don't ingest this meeting** — nothing from that time window is processed. A recording is not transcribed, and a transcript already in the inbox is moved to `_System/skipped/`
 

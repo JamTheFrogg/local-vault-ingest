@@ -1,0 +1,1 @@
+This folder is my Obsidian vault, the source of truth about my clients and my work. At the start of every task, read `CLAUDE.md` in this folder, then read `_System/AI-Instructions.md`, and follow both. Do not ask me for background that is already in the vault.
